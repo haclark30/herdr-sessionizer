@@ -1,11 +1,11 @@
-id = "sessioniser"
-name = "Sessioniser"
+id = "sessionizer"
+name = "Sessionizer"
 description = "tmux-sessionizer for herdr: fzf over open workspaces and zoxide directories, create-or-focus with template tabs"
-version = "0.1.0"
+version = "0.4.0"
 min_herdr_version = "0.7.0"
 platforms = ["macos", "linux"]
 
-# Keybinding target: [[keys.command]] type = "plugin_action", command = "sessioniser.pick"
+# Keybinding target: [[keys.command]] type = "plugin_action", command = "sessionizer.pick"
 [[actions]]
 id = "pick"
 title = "Open workspace picker"
@@ -13,6 +13,6 @@ command = ["bash", "bin/open-picker"]
 
 [[panes]]
 id = "picker"
-title = "Sessioniser"
+title = "Sessionizer"
 placement = "overlay"
-command = ["bash", "bin/sessioniser"]
+command = ["bash", "bin/sessionizer"]

@@ -1,4 +1,4 @@
-# herdr-sessioniser
+# herdr-sessionizer
 
 tmux-sessionizer, for [herdr](https://herdr.dev). One keybind opens an fzf
 picker over your open workspaces and your zoxide directories; selecting an
@@ -11,14 +11,15 @@ recent workspaces, like tmux's `switch-client -l`.
 
 ## Requirements
 
-`herdr` ≥ 0.7, `fzf`, `zoxide`, `jq`, `bash` ≥ 4.
+`herdr` ≥ 0.7, `fzf`, `jq`, `bash` ≥ 4. `zoxide` is recommended but optional —
+without it the picker only offers open workspaces and `extra_dirs`.
 
 ## Install
 
 ```sh
-herdr plugin install salkhalil/herdr-sessioniser   # from GitHub
+herdr plugin install salkhalil/herdr-sessionizer   # from GitHub
 # or, from a local checkout:
-herdr plugin link /path/to/herdr-sessioniser
+herdr plugin link /path/to/herdr-sessionizer
 ```
 
 Then bind a key in `~/.config/herdr/config.toml`:
@@ -27,7 +28,7 @@ Then bind a key in `~/.config/herdr/config.toml`:
 [[keys.command]]
 key = "prefix+f"
 type = "plugin_action"
-command = "sessioniser.pick"
+command = "sessionizer.pick"
 description = "fuzzy-switch workspace"
 ```
 
@@ -35,19 +36,47 @@ and `herdr server reload-config`.
 
 ## CLI use
 
-`bin/sessioniser` also works standalone from any shell (symlink it onto your
-PATH): run it bare for the picker, or `sessioniser <dir>` to switch/create
+`bin/sessionizer` also works standalone from any shell (symlink it onto your
+PATH): run it bare for the picker, or `sessionizer <dir>` to switch/create
 directly — handy for scripting.
 
 ## Configuration
 
-First run writes a commented `config.sh` to the plugin config dir
-(`herdr plugin config-dir sessioniser`). Options:
+First run writes `config.json` to the plugin config dir
+(`herdr plugin config-dir sessionizer`):
 
-- `TEMPLATE` — array of `"label:command"` tabs for new workspaces. The first
-  entry replaces the initial tab and gets focus; `"label:"` leaves a plain
-  shell; arguments work (`"cc:claude --continue"`).
-- `GIT_ROOTS_ONLY` — set `0` to offer every zoxide directory, not just git roots.
-- `EXTRA_DIRS` — directories to always offer regardless of zoxide/git.
+```json
+{
+  "template": [
+    { "tab": "cc", "command": "claude" },
+    { "tab": "vim", "command": "nvim" },
+    { "tab": "lazygit", "command": "lazygit" }
+  ],
+  "git_roots_only": true,
+  "extra_dirs": ["~/Documents/some-project"],
+  "overrides": [
+    {
+      "match": "*/Tortus/*",
+      "template": [
+        { "tab": "cc", "command": "claude" },
+        { "tab": "dev", "command": "pnpm dev" },
+        { "tab": "scratch" }
+      ]
+    }
+  ]
+}
+```
+
+- `template` — tabs for new workspaces. The first entry replaces the initial
+  tab and gets focus; `command` is typed into the tab's shell (arguments
+  work), and omitting it leaves a plain shell.
+- `git_roots_only` — set `false` to offer every zoxide directory, not just
+  git roots.
+- `extra_dirs` — directories to always offer regardless of zoxide/git
+  (leading `~` is expanded).
+- `overrides` — per-project templates: the first entry whose glob `match`es
+  the new workspace's directory replaces `template`. Overrides live in your
+  config, never in the target repo, so cloned code can't inject commands
+  into fresh shells.
 
 Switch history (for recency ordering) lives in the plugin state dir.

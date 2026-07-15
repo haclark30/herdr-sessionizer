@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 #
-# sessioniser — tmux-sessionizer for herdr.
+# sessionizer — tmux-sessionizer for herdr.
 #
 # Fuzzy-pick from open herdr workspaces + zoxide directories. Selecting an
 # open workspace focuses it; selecting a directory creates a workspace there
 # with template tabs (default: cc/claude, vim/nvim, lazygit/lazygit).
 #
-# Open workspaces are ordered by how recently the sessioniser switched to
+# Open workspaces are ordered by how recently the sessionizer switched to
 # them, with the currently focused workspace last — so on open, the cursor
 # sits on your last-used other workspace and plain <enter> toggles between
 # the two, like tmux `switch-client -l`.
 #
 # Usage:
-#   sessioniser              interactive fzf picker
-#   sessioniser <dir>        skip the picker, switch/create directly
+#   sessionizer              interactive fzf picker
+#   sessionizer <dir>        skip the picker, switch/create directly
 #
 # Runs as a herdr plugin pane (see herdr-plugin.toml) or standalone from any
-# shell. Config: config.sh in $HERDR_PLUGIN_CONFIG_DIR (plugin) or
-# ~/.config/herdr-sessioniser (standalone) — created with defaults on first run.
+# shell. Config: config.json in $HERDR_PLUGIN_CONFIG_DIR (plugin) or
+# ~/.config/herdr-sessionizer (standalone) — created with defaults on first run.
 #
 # Internal flags (used by fzf): --list, --preview <type> <target>
 
@@ -25,58 +25,113 @@ set -euo pipefail
 
 HERDR="${HERDR_BIN_PATH:-herdr}"
 
+# In a plugin pane, stderr vanishes when the pane closes on exit — hold it
+# open long enough to read the message.
+die() {
+  echo "sessionizer: $*" >&2
+  [ -n "${HERDR_PLUGIN_ENTRYPOINT_ID:-}" ] && sleep 4
+  exit 1
+}
+
+command -v jq >/dev/null || die "jq is required (brew install jq)"
+HAVE_ZOXIDE=0
+command -v zoxide >/dev/null && HAVE_ZOXIDE=1
+
 # Standalone runs ask herdr for the plugin's config dir so CLI and plugin-pane
 # invocations share one config and switch history.
 CONFIG_DIR="${HERDR_PLUGIN_CONFIG_DIR:-}"
 if [ -z "$CONFIG_DIR" ]; then
-  CONFIG_DIR="$($HERDR plugin config-dir sessioniser 2>/dev/null || true)"
+  CONFIG_DIR="$($HERDR plugin config-dir sessionizer 2>/dev/null || true)"
 fi
-[ -n "$CONFIG_DIR" ] || CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/herdr-sessioniser"
+[ -n "$CONFIG_DIR" ] || CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/herdr-sessionizer"
 STATE_DIR="$CONFIG_DIR/state"
-CONFIG_FILE="$CONFIG_DIR/config.sh"
+CONFIG_FILE="$CONFIG_DIR/config.json"
 HISTORY_FILE="$STATE_DIR/history"
 
-# --- defaults, overridable in $CONFIG_FILE -------------------------------------
-
-# Tabs for new workspaces: "label:command". First entry replaces the initial
-# tab and gets focus. The command is typed into the tab's shell; "label:"
-# (empty command) leaves a plain shell.
-TEMPLATE=("cc:claude" "vim:nvim" "lazygit:lazygit")
-
-# Only offer zoxide results that are git roots (contain .git).
+# Defaults, overridable per key in config.json (see README for the schema).
+TEMPLATE_TABS=("cc" "vim" "lazygit")
+TEMPLATE_CMDS=("claude" "nvim" "lazygit")
 GIT_ROOTS_ONLY=1
-
-# Directories always offered, even if absent from zoxide or not git roots.
 EXTRA_DIRS=()
+
+read_template() {
+  # Reads a jq expression yielding [{tab, command?}] into the template arrays.
+  TEMPLATE_TABS=()
+  TEMPLATE_CMDS=()
+  local tab cmd
+  while IFS=$'\t' read -r tab cmd; do
+    TEMPLATE_TABS+=("$tab")
+    TEMPLATE_CMDS+=("$cmd")
+  done < <(jq -r "$1 | .[] | [.tab, .command // \"\"] | @tsv" "$CONFIG_FILE")
+}
 
 load_config() {
   mkdir -p "$CONFIG_DIR" "$STATE_DIR"
   if [ ! -f "$CONFIG_FILE" ]; then
     cat >"$CONFIG_FILE" <<'EOF'
-# herdr-sessioniser configuration (sourced as bash)
-
-# Tabs created in new workspaces: "label:command". The first entry replaces
-# the workspace's initial tab and receives focus. Commands are typed into the
-# tab's shell, so arguments work: "cc:claude --continue". A trailing colon
-# with no command ("scratch:") leaves a plain shell.
-#TEMPLATE=("cc:claude" "vim:nvim" "lazygit:lazygit")
-
-# Only offer zoxide results that are git roots (contain .git). Set to 0 to
-# list every zoxide directory.
-#GIT_ROOTS_ONLY=1
-
-# Directories to always offer, even if not in zoxide or not git roots.
-#EXTRA_DIRS=("$HOME/Documents/Ideas/some-project")
+{
+  "template": [
+    { "tab": "cc", "command": "claude" },
+    { "tab": "vim", "command": "nvim" },
+    { "tab": "lazygit", "command": "lazygit" }
+  ],
+  "git_roots_only": true,
+  "extra_dirs": [],
+  "overrides": []
+}
 EOF
   fi
-  # shellcheck source=/dev/null
-  . "$CONFIG_FILE"
+  jq -e . "$CONFIG_FILE" >/dev/null 2>&1 || die "invalid JSON in $CONFIG_FILE"
+  jq -e '
+    def valid_template: all(type == "object" and (.tab | type == "string" and length > 0));
+    ((.template // []) | valid_template)
+    and ((.overrides // []) | all((.template // []) | valid_template))
+  ' "$CONFIG_FILE" >/dev/null \
+    || die "template entries must be objects with a non-empty \"tab\" (in $CONFIG_FILE)"
+
+  if [ "$(jq -r 'has("template")' "$CONFIG_FILE")" = true ]; then
+    read_template '.template'
+  fi
+  GIT_ROOTS_ONLY="$(jq -r 'if (.git_roots_only // true) then 1 else 0 end' "$CONFIG_FILE")"
+  EXTRA_DIRS=()
+  local d
+  while IFS= read -r d; do
+    [ -n "$d" ] && EXTRA_DIRS+=("${d/#\~/$HOME}")
+  done < <(jq -r '(.extra_dirs // [])[]' "$CONFIG_FILE")
+}
+
+# First "overrides" entry whose glob matches the new workspace dir replaces
+# TEMPLATE. Overrides live in the user's config, never in the target repo, so
+# cloned code can't choose what gets typed into fresh shells.
+apply_template_overrides() {
+  local dir="$1" i n match
+  n="$(jq -r '(.overrides // []) | length' "$CONFIG_FILE")"
+  for ((i = 0; i < n; i++)); do
+    match="$(jq -r ".overrides[$i].match // empty" "$CONFIG_FILE")"
+    [ -n "$match" ] || continue
+    # shellcheck disable=SC2254 — unquoted on purpose: glob match
+    case "$dir" in
+      $match)
+        read_template ".overrides[$i].template // []"
+        return
+        ;;
+    esac
+  done
 }
 
 # --- candidate list -------------------------------------------------------------
 
 # TSV rows: <type> <id-or-path> <display>
 snapshot_json() { $HERDR api snapshot; }
+
+# $HOME prefix → "~" (bash 3.2-safe; ${var/#$HOME/~} tilde-expands on bash 5).
+display_path() {
+  case "$1" in
+    "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;;
+    "$HOME") printf '~' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
 
 # Open workspaces as: <ws_id> <label> <status> <cwd> <focused>
 open_rows() {
@@ -112,22 +167,25 @@ list_candidates() {
     fi
     [ "$focused" = "true" ] && sort_class=1
     printf '%d\t%09d\t%03d\topen\t%s\t● %s [%s]  %s\n' \
-      "$sort_class" $((999999999 - rank)) "$number" "$ws_id" "$label" "$status" "${cwd/#$HOME/\~}"
+      "$sort_class" $((999999999 - rank)) "$number" "$ws_id" "$label" "$status" "$(display_path "$cwd")"
   done | sort -t$'\t' -k1,1n -k2,2n -k3,3n | cut -f4-
 
   # Zoxide dirs (frecency order) + EXTRA_DIRS, minus already-open ones.
+  # Without zoxide the picker still manages open workspaces and EXTRA_DIRS.
   {
-    zoxide query -l | while IFS= read -r dir; do
-      [ -d "$dir" ] || continue
-      if [ "$GIT_ROOTS_ONLY" = 1 ] && [ ! -e "$dir/.git" ]; then continue; fi
-      printf '%s\n' "$dir"
-    done
+    if [ "$HAVE_ZOXIDE" = 1 ]; then
+      zoxide query -l | while IFS= read -r dir; do
+        [ -d "$dir" ] || continue
+        if [ "$GIT_ROOTS_ONLY" = 1 ] && [ ! -e "$dir/.git" ]; then continue; fi
+        printf '%s\n' "$dir"
+      done
+    fi
     for dir in ${EXTRA_DIRS[@]+"${EXTRA_DIRS[@]}"}; do
       [ -d "$dir" ] && printf '%s\n' "$dir"
     done
   } | awk '!seen[$0]++' | while IFS= read -r dir; do
     if [ -n "$open_cwds" ] && grep -qFx "$dir" <<<"$open_cwds"; then continue; fi
-    printf 'dir\t%s\t  %s\n' "$dir" "${dir/#$HOME/\~}"
+    printf 'dir\t%s\t  %s\n' "$dir" "$(display_path "$dir")"
   done
 }
 
@@ -158,26 +216,25 @@ record_history() {
 focus_workspace() {
   local ws_id="$1" cwd="$2"
   $HERDR workspace focus "$ws_id" >/dev/null
-  [ -n "$cwd" ] && record_history "$cwd"
+  if [ -n "$cwd" ]; then record_history "$cwd"; fi
 }
 
 create_workspace() {
   local dir="$1" label created ws_id first_tab first_pane
   label="$(basename "$dir")"
+  apply_template_overrides "$dir"
   created="$($HERDR workspace create --cwd "$dir" --label "$label" --focus)"
   ws_id="$(jq -r '.result.workspace.workspace_id' <<<"$created")"
   first_tab="$(jq -r '.result.tab.tab_id' <<<"$created")"
   first_pane="$(jq -r '.result.root_pane.pane_id' <<<"$created")"
 
-  local entry tab_label cmd pane out first=1
-  for entry in ${TEMPLATE[@]+"${TEMPLATE[@]}"}; do
-    tab_label="${entry%%:*}"
-    cmd="${entry#*:}"
-    [ "$cmd" = "$entry" ] && cmd=""
-    if [ "$first" = 1 ]; then
+  local i tab_label cmd pane out
+  for ((i = 0; i < ${#TEMPLATE_TABS[@]}; i++)); do
+    tab_label="${TEMPLATE_TABS[$i]}"
+    cmd="${TEMPLATE_CMDS[$i]}"
+    if [ "$i" = 0 ]; then
       $HERDR tab rename "$first_tab" "$tab_label" >/dev/null
       pane="$first_pane"
-      first=0
     else
       out="$($HERDR tab create --workspace "$ws_id" --label "$tab_label" --no-focus)"
       pane="$(jq -r '.result.root_pane.pane_id' <<<"$out")"
@@ -187,7 +244,7 @@ create_workspace() {
       $HERDR pane run "$pane" "$cmd" >/dev/null
     fi
   done
-  [ "$first" = 0 ] && $HERDR tab focus "$first_tab" >/dev/null
+  [ "${#TEMPLATE_TABS[@]}" -gt 0 ] && $HERDR tab focus "$first_tab" >/dev/null
   record_history "$dir"
 }
 
@@ -222,6 +279,7 @@ case "${1:-}" in
     exit 0
     ;;
   "")
+    command -v fzf >/dev/null || die "fzf is required for the picker (brew install fzf)"
     selection="$(list_candidates | fzf \
       --delimiter '\t' --with-nth 3 \
       --no-multi --reverse --border --prompt 'workspace> ' \
@@ -241,7 +299,7 @@ case "${1:-}" in
     esac
     ;;
   *)
-    [ -d "$1" ] || { echo "sessioniser: not a directory: $1" >&2; exit 1; }
+    [ -d "$1" ] || { echo "sessionizer: not a directory: $1" >&2; exit 1; }
     switch_to_dir "$1"
     ;;
 esac
