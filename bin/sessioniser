@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+#
+# sessioniser — tmux-sessionizer for herdr.
+#
+# Fuzzy-pick from open herdr workspaces + zoxide directories. Selecting an
+# open workspace focuses it; selecting a directory creates a workspace there
+# with template tabs (default: cc/claude, vim/nvim, lazygit/lazygit).
+#
+# Open workspaces are ordered by how recently the sessioniser switched to
+# them, with the currently focused workspace last — so on open, the cursor
+# sits on your last-used other workspace and plain <enter> toggles between
+# the two, like tmux `switch-client -l`.
+#
+# Usage:
+#   sessioniser              interactive fzf picker
+#   sessioniser <dir>        skip the picker, switch/create directly
+#
+# Runs as a herdr plugin pane (see herdr-plugin.toml) or standalone from any
+# shell. Config: config.sh in $HERDR_PLUGIN_CONFIG_DIR (plugin) or
+# ~/.config/herdr-sessioniser (standalone) — created with defaults on first run.
+#
+# Internal flags (used by fzf): --list, --preview <type> <target>
+
+set -euo pipefail
+
+HERDR="${HERDR_BIN_PATH:-herdr}"
+
+# Standalone runs ask herdr for the plugin's config dir so CLI and plugin-pane
+# invocations share one config and switch history.
+CONFIG_DIR="${HERDR_PLUGIN_CONFIG_DIR:-}"
+if [ -z "$CONFIG_DIR" ]; then
+  CONFIG_DIR="$($HERDR plugin config-dir sessioniser 2>/dev/null || true)"
+fi
+[ -n "$CONFIG_DIR" ] || CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/herdr-sessioniser"
+STATE_DIR="$CONFIG_DIR/state"
+CONFIG_FILE="$CONFIG_DIR/config.sh"
+HISTORY_FILE="$STATE_DIR/history"
+
+# --- defaults, overridable in $CONFIG_FILE -------------------------------------
+
+# Tabs for new workspaces: "label:command". First entry replaces the initial
+# tab and gets focus. The command is typed into the tab's shell; "label:"
+# (empty command) leaves a plain shell.
+TEMPLATE=("cc:claude" "vim:nvim" "lazygit:lazygit")
+
+# Only offer zoxide results that are git roots (contain .git).
+GIT_ROOTS_ONLY=1
+
+# Directories always offered, even if absent from zoxide or not git roots.
+EXTRA_DIRS=()
+
+load_config() {
+  mkdir -p "$CONFIG_DIR" "$STATE_DIR"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    cat >"$CONFIG_FILE" <<'EOF'
+# herdr-sessioniser configuration (sourced as bash)
+
+# Tabs created in new workspaces: "label:command". The first entry replaces
+# the workspace's initial tab and receives focus. Commands are typed into the
+# tab's shell, so arguments work: "cc:claude --continue". A trailing colon
+# with no command ("scratch:") leaves a plain shell.
+#TEMPLATE=("cc:claude" "vim:nvim" "lazygit:lazygit")
+
+# Only offer zoxide results that are git roots (contain .git). Set to 0 to
+# list every zoxide directory.
+#GIT_ROOTS_ONLY=1
+
+# Directories to always offer, even if not in zoxide or not git roots.
+#EXTRA_DIRS=("$HOME/Documents/Ideas/some-project")
+EOF
+  fi
+  # shellcheck source=/dev/null
+  . "$CONFIG_FILE"
+}
+
+# --- candidate list -------------------------------------------------------------
+
+# TSV rows: <type> <id-or-path> <display>
+snapshot_json() { $HERDR api snapshot; }
+
+# Open workspaces as: <ws_id> <label> <status> <cwd> <focused>
+open_rows() {
+  jq -r '
+    .result.snapshot as $s
+    | $s.workspaces[]
+    | . as $w
+    | ([$s.panes[] | select(.workspace_id == $w.workspace_id)][0].cwd // "") as $cwd
+    | [$w.workspace_id, $w.label, $w.agent_status, $cwd, ($w.focused|tostring), ($w.number|tostring)]
+    | @tsv
+  ' <<<"$1"
+}
+
+# Rank of each path in switch history (higher = more recent, 0 = never).
+history_rank() {
+  [ -f "$HISTORY_FILE" ] || { echo ""; return; }
+  awk '{ rank[$0] = NR } END { for (p in rank) printf "%d\t%s\n", rank[p], p }' "$HISTORY_FILE"
+}
+
+list_candidates() {
+  local snapshot ranks open_cwds
+  snapshot="$(snapshot_json)"
+  ranks="$(history_rank)"
+  open_cwds="$(open_rows "$snapshot" | cut -f4)"
+
+  # Open workspaces: unfocused ones by switch recency (then workspace number),
+  # focused workspace last.
+  open_rows "$snapshot" | while IFS=$'\t' read -r ws_id label status cwd focused number; do
+    local rank=0 sort_class=0
+    if [ -n "$ranks" ]; then
+      rank="$(awk -F'\t' -v p="$cwd" '$2 == p { print $1 }' <<<"$ranks")"
+      rank="${rank:-0}"
+    fi
+    [ "$focused" = "true" ] && sort_class=1
+    printf '%d\t%09d\t%03d\topen\t%s\t● %s [%s]  %s\n' \
+      "$sort_class" $((999999999 - rank)) "$number" "$ws_id" "$label" "$status" "${cwd/#$HOME/\~}"
+  done | sort -t$'\t' -k1,1n -k2,2n -k3,3n | cut -f4-
+
+  # Zoxide dirs (frecency order) + EXTRA_DIRS, minus already-open ones.
+  {
+    zoxide query -l | while IFS= read -r dir; do
+      [ -d "$dir" ] || continue
+      if [ "$GIT_ROOTS_ONLY" = 1 ] && [ ! -e "$dir/.git" ]; then continue; fi
+      printf '%s\n' "$dir"
+    done
+    for dir in ${EXTRA_DIRS[@]+"${EXTRA_DIRS[@]}"}; do
+      [ -d "$dir" ] && printf '%s\n' "$dir"
+    done
+  } | awk '!seen[$0]++' | while IFS= read -r dir; do
+    if [ -n "$open_cwds" ] && grep -qFx "$dir" <<<"$open_cwds"; then continue; fi
+    printf 'dir\t%s\t  %s\n' "$dir" "${dir/#$HOME/\~}"
+  done
+}
+
+# --- preview ----------------------------------------------------------------------
+
+preview() {
+  local type="$1" target="$2"
+  case "$type" in
+    open)
+      $HERDR tab list --workspace "$target" \
+        | jq -r '.result.tabs[] | "\(.number). \(.label)  [\(.agent_status)]"'
+      ;;
+    dir)
+      git -C "$target" -c color.ui=always status --short --branch 2>/dev/null || true
+      echo
+      git -C "$target" -c color.ui=always log --oneline -8 2>/dev/null || true
+      ;;
+  esac
+}
+
+# --- switching --------------------------------------------------------------------
+
+record_history() {
+  printf '%s\n' "$1" >>"$HISTORY_FILE"
+  tail -n 500 "$HISTORY_FILE" >"$HISTORY_FILE.tmp" && mv "$HISTORY_FILE.tmp" "$HISTORY_FILE"
+}
+
+focus_workspace() {
+  local ws_id="$1" cwd="$2"
+  $HERDR workspace focus "$ws_id" >/dev/null
+  [ -n "$cwd" ] && record_history "$cwd"
+}
+
+create_workspace() {
+  local dir="$1" label created ws_id first_tab first_pane
+  label="$(basename "$dir")"
+  created="$($HERDR workspace create --cwd "$dir" --label "$label" --focus)"
+  ws_id="$(jq -r '.result.workspace.workspace_id' <<<"$created")"
+  first_tab="$(jq -r '.result.tab.tab_id' <<<"$created")"
+  first_pane="$(jq -r '.result.root_pane.pane_id' <<<"$created")"
+
+  local entry tab_label cmd pane out first=1
+  for entry in ${TEMPLATE[@]+"${TEMPLATE[@]}"}; do
+    tab_label="${entry%%:*}"
+    cmd="${entry#*:}"
+    [ "$cmd" = "$entry" ] && cmd=""
+    if [ "$first" = 1 ]; then
+      $HERDR tab rename "$first_tab" "$tab_label" >/dev/null
+      pane="$first_pane"
+      first=0
+    else
+      out="$($HERDR tab create --workspace "$ws_id" --label "$tab_label" --no-focus)"
+      pane="$(jq -r '.result.root_pane.pane_id' <<<"$out")"
+    fi
+    if [ -n "$cmd" ]; then
+      sleep 0.2 # let the pane shell come up before typing into it
+      $HERDR pane run "$pane" "$cmd" >/dev/null
+    fi
+  done
+  [ "$first" = 0 ] && $HERDR tab focus "$first_tab" >/dev/null
+  record_history "$dir"
+}
+
+switch_to_dir() {
+  local dir="$1" ws_id
+  dir="$(cd "$dir" && pwd)"
+  ws_id="$(snapshot_json | jq -r --arg dir "$dir" '
+    .result.snapshot as $s
+    | $s.workspaces[]
+    | . as $w
+    | select(([$s.panes[] | select(.workspace_id == $w.workspace_id)][0].cwd // "") == $dir)
+    | $w.workspace_id
+  ' | head -n1)"
+  if [ -n "$ws_id" ]; then
+    focus_workspace "$ws_id" "$dir"
+  else
+    create_workspace "$dir"
+  fi
+}
+
+# --- entrypoint --------------------------------------------------------------------
+
+load_config
+
+case "${1:-}" in
+  --list)
+    list_candidates
+    exit 0
+    ;;
+  --preview)
+    preview "$2" "$3"
+    exit 0
+    ;;
+  "")
+    selection="$(list_candidates | fzf \
+      --delimiter '\t' --with-nth 3 \
+      --no-multi --reverse --border --prompt 'workspace> ' \
+      --preview "\"$0\" --preview {1} {2}" \
+      --preview-window 'right,55%,border-left')" || exit 0
+    type="$(cut -f1 <<<"$selection")"
+    target="$(cut -f2 <<<"$selection")"
+    case "$type" in
+      open)
+        cwd="$(snapshot_json | jq -r --arg ws "$target" '
+          .result.snapshot as $s
+          | [$s.panes[] | select(.workspace_id == $ws)][0].cwd // ""
+        ')"
+        focus_workspace "$target" "$cwd"
+        ;;
+      dir) switch_to_dir "$target" ;;
+    esac
+    ;;
+  *)
+    [ -d "$1" ] || { echo "sessioniser: not a directory: $1" >&2; exit 1; }
+    switch_to_dir "$1"
+    ;;
+esac

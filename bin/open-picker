@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Action entrypoint: opens the picker pane declared in the manifest.
+exec "${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin sessioniser --entrypoint picker
