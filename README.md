@@ -9,10 +9,14 @@ Open workspaces are ordered by how recently you switched to them, with the
 current workspace last — so `prefix+f`, `enter` toggles between your two most
 recent workspaces, like tmux's `switch-client -l`.
 
+Press `tab` inside the picker to flip to the **agent view**: one row per pane
+with a detected agent, most urgent first, for jumping straight to whichever
+agent needs you.
+
 ## Requirements
 
-`herdr` ≥ 0.7, `fzf`, `jq`, `bash` ≥ 4. `zoxide` is recommended but optional —
-without it the picker only offers open workspaces and `extra_dirs`.
+`herdr` ≥ 0.7, `fzf` ≥ 0.45, `jq`, `bash` ≥ 4. `zoxide` is recommended but
+optional — without it the picker only offers open workspaces and `extra_dirs`.
 
 ## Install
 
@@ -22,7 +26,7 @@ herdr plugin install salkhalil/herdr-sessionizer   # from GitHub
 herdr plugin link /path/to/herdr-sessionizer
 ```
 
-Then bind a key in `~/.config/herdr/config.toml`:
+Then bind keys in `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
@@ -30,15 +34,37 @@ key = "prefix+f"
 type = "plugin_action"
 command = "sessionizer.pick"
 description = "fuzzy-switch workspace"
+
+[[keys.command]]
+key = "prefix+a"
+type = "plugin_action"
+command = "sessionizer.agents"
+description = "jump to an agent"
 ```
 
 and `herdr server reload-config`.
 
+## Agent view
+
+`tab` flips the picker between the workspace view and the agent view (and
+back); `sessionizer.agents` opens directly in it. Rows are ordered
+`blocked > done > working > idle`, then by workspace/tab number, with the
+agent you're currently in last — so `enter` jumps to the most urgent agent
+elsewhere. Non-agent tabs (vim, lazygit, plain shells) never appear; reach
+those through the workspace view.
+
+The preview shows the agent's live screen — e.g. the exact permission prompt
+a `blocked` agent is stuck on — so you can decide before jumping. `ctrl-r`
+refreshes statuses in either view.
+
+Jumping to an agent records the target workspace in switch history, so the
+workspace view's recency order (and the `enter` toggle) stays truthful.
+
 ## CLI use
 
 `bin/sessionizer` also works standalone from any shell (symlink it onto your
-PATH): run it bare for the picker, or `sessionizer <dir>` to switch/create
-directly — handy for scripting.
+PATH): run it bare for the picker, `sessionizer --agents` for the agent view,
+or `sessionizer <dir>` to switch/create directly — handy for scripting.
 
 ## Configuration
 

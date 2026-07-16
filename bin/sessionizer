@@ -11,15 +11,24 @@
 # sits on your last-used other workspace and plain <enter> toggles between
 # the two, like tmux `switch-client -l`.
 #
+# A second view — the agent view — lists every pane with a detected agent,
+# most urgent first (blocked > done > working > idle; focused agent last).
+# <tab> flips between the two views; selecting an agent row jumps straight
+# to that pane via `herdr agent focus`.
+#
 # Usage:
-#   sessionizer              interactive fzf picker
+#   sessionizer              interactive fzf picker (workspace view)
+#   sessionizer --agents     interactive fzf picker (agent view)
 #   sessionizer <dir>        skip the picker, switch/create directly
 #
 # Runs as a herdr plugin pane (see herdr-plugin.toml) or standalone from any
-# shell. Config: config.json in $HERDR_PLUGIN_CONFIG_DIR (plugin) or
+# shell. SESSIONIZER_MODE=agents opens in agent view (how the manifest's
+# "agents" action selects the view, since pane commands are fixed).
+# Config: config.json in $HERDR_PLUGIN_CONFIG_DIR (plugin) or
 # ~/.config/herdr-sessionizer (standalone) — created with defaults on first run.
 #
-# Internal flags (used by fzf): --list, --preview <type> <target>
+# Internal flags (used by fzf): --list [workspaces|agents],
+# --preview <type> <target>, --fzf-action <toggle|refresh>
 
 set -euo pipefail
 
@@ -189,6 +198,48 @@ list_candidates() {
   done
 }
 
+# Agent view: one row per pane with a detected agent, most urgent first —
+# blocked > done > working > idle, then workspace/tab number (positional, so
+# rows don't reshuffle between opens), with the focused agent last like the
+# workspace view. TSV rows: agent <pane_id> <display>.
+list_agents() {
+  snapshot_json | jq -r '
+    .result.snapshot as $s
+    | ($s.workspaces | map({key: .workspace_id, value: .}) | from_entries) as $ws
+    | ($s.tabs | map({key: .tab_id, value: .}) | from_entries) as $tabs
+    | [$s.panes[] | select(.agent)]
+    | map({
+        pane_id, agent,
+        status: .agent_status,
+        loc: (($ws[.workspace_id].label // .workspace_id) + " · " + ($tabs[.tab_id].label // .tab_id)),
+        sort: [
+          (if .focused then 1 else 0 end),
+          ({blocked: 0, done: 1, working: 2, idle: 3}[.agent_status] // 4),
+          ($ws[.workspace_id].number // 999),
+          ($tabs[.tab_id].number // 999),
+          .pane_id
+        ]
+      })
+    | sort_by(.sort)
+    | (map(.loc | length) | max // 0) as $w
+    | .[]
+    | ({blocked: "\u001b[31m", done: "\u001b[32m", working: "\u001b[33m", idle: "\u001b[2m"}[.status] // "") as $color
+    | [ "agent", .pane_id,
+        $color + (.status + "       ")[0:7] + "\u001b[0m  "
+          + .loc + ((" " * ($w - (.loc | length))) // "")
+          + "  \u001b[2m" + .agent + "\u001b[0m"
+      ]
+    | @tsv
+  '
+}
+
+list_for_mode() {
+  case "$1" in
+    agents) list_agents ;;
+    *) list_candidates ;;
+  esac
+}
+
 # --- preview ----------------------------------------------------------------------
 
 preview() {
@@ -203,6 +254,17 @@ preview() {
       echo
       git -C "$target" -c color.ui=always log --oneline -8 2>/dev/null || true
       ;;
+    agent)
+      # The agent's live screen — what you'd see after jumping, so a blocked
+      # agent's actual prompt is readable before committing to the switch.
+      $HERDR agent get "$target" | jq -r '
+        .result.agent | "\(.agent)  [\(.agent_status)]  \(.cwd)"
+      '
+      echo
+      $HERDR agent read "$target" --source visible --format ansi \
+        | jq -r '.result.read.text' \
+        | tail -n "$((${FZF_PREVIEW_LINES:-40} - 2))"
+      ;;
   esac
 }
 
@@ -216,6 +278,20 @@ record_history() {
 focus_workspace() {
   local ws_id="$1" cwd="$2"
   $HERDR workspace focus "$ws_id" >/dev/null
+  if [ -n "$cwd" ]; then record_history "$cwd"; fi
+}
+
+# Jump straight to an agent pane (workspace + tab + pane in one call). Records
+# history under the target workspace's first-pane cwd — the same key the
+# workspace view uses — not the agent pane's own cwd, which may be a subdir.
+focus_agent() {
+  local pane_id="$1" cwd
+  $HERDR agent focus "$pane_id" >/dev/null
+  cwd="$(snapshot_json | jq -r --arg pane "$pane_id" '
+    .result.snapshot as $s
+    | ($s.panes[] | select(.pane_id == $pane) | .workspace_id) as $ws
+    | [$s.panes[] | select(.workspace_id == $ws)][0].cwd // ""
+  ')"
   if [ -n "$cwd" ]; then record_history "$cwd"; fi
 }
 
@@ -265,38 +341,75 @@ switch_to_dir() {
   fi
 }
 
+# --- picker -----------------------------------------------------------------------
+
+# Prints the fzf action for the <tab>/<ctrl-r> transform bindings. Runs as a
+# fresh process inside fzf, so the current view is read from $FZF_PROMPT —
+# stateless, and works no matter which view the picker opened in.
+fzf_mode_action() {
+  local kind="$1" mode="workspaces" prompt="workspace> "
+  case "$kind:${FZF_PROMPT:-}" in
+    toggle:"workspace> ") mode="agents" prompt="agents> " ;;
+    refresh:"agents> ") mode="agents" prompt="agents> " ;;
+  esac
+  printf 'reload("%s" --list %s)+change-prompt(%s)' "$0" "$mode" "$prompt"
+}
+
+run_picker() {
+  local mode="$1" prompt="workspace> "
+  [ "$mode" = agents ] && prompt="agents> "
+  command -v fzf >/dev/null || die "fzf is required for the picker (brew install fzf)"
+  selection="$(list_for_mode "$mode" | fzf \
+    --delimiter '\t' --with-nth 3 --ansi \
+    --no-multi --reverse --border --prompt "$prompt" \
+    --header 'tab: workspaces ⇄ agents · ctrl-r: refresh' \
+    --bind "tab:transform:\"$0\" --fzf-action toggle" \
+    --bind "ctrl-r:transform:\"$0\" --fzf-action refresh" \
+    --preview "\"$0\" --preview {1} {2}" \
+    --preview-window 'right,55%,border-left')" || exit 0
+  type="$(cut -f1 <<<"$selection")"
+  target="$(cut -f2 <<<"$selection")"
+  case "$type" in
+    open)
+      cwd="$(snapshot_json | jq -r --arg ws "$target" '
+        .result.snapshot as $s
+        | [$s.panes[] | select(.workspace_id == $ws)][0].cwd // ""
+      ')"
+      focus_workspace "$target" "$cwd"
+      ;;
+    dir) switch_to_dir "$target" ;;
+    agent) focus_agent "$target" ;;
+  esac
+}
+
 # --- entrypoint --------------------------------------------------------------------
 
 load_config
 
 case "${1:-}" in
   --list)
-    list_candidates
+    list_for_mode "${2:-workspaces}"
     exit 0
     ;;
   --preview)
     preview "$2" "$3"
     exit 0
     ;;
+  --fzf-action)
+    fzf_mode_action "$2"
+    exit 0
+    ;;
+  --agents)
+    run_picker agents
+    ;;
   "")
-    command -v fzf >/dev/null || die "fzf is required for the picker (brew install fzf)"
-    selection="$(list_candidates | fzf \
-      --delimiter '\t' --with-nth 3 \
-      --no-multi --reverse --border --prompt 'workspace> ' \
-      --preview "\"$0\" --preview {1} {2}" \
-      --preview-window 'right,55%,border-left')" || exit 0
-    type="$(cut -f1 <<<"$selection")"
-    target="$(cut -f2 <<<"$selection")"
-    case "$type" in
-      open)
-        cwd="$(snapshot_json | jq -r --arg ws "$target" '
-          .result.snapshot as $s
-          | [$s.panes[] | select(.workspace_id == $ws)][0].cwd // ""
-        ')"
-        focus_workspace "$target" "$cwd"
-        ;;
-      dir) switch_to_dir "$target" ;;
-    esac
+    # The manifest's "agents" action opens this same pane with
+    # SESSIONIZER_MODE=agents (pane commands are fixed; env is not).
+    if [ "${SESSIONIZER_MODE:-}" = agents ]; then
+      run_picker agents
+    else
+      run_picker workspaces
+    fi
     ;;
   *)
     [ -d "$1" ] || { echo "sessionizer: not a directory: $1" >&2; exit 1; }
