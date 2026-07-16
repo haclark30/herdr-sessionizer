@@ -4,7 +4,7 @@
 #
 # Fuzzy-pick from open herdr workspaces + zoxide directories. Selecting an
 # open workspace focuses it; selecting a directory creates a workspace there
-# with template tabs (default: cc/claude, vim/nvim, lazygit/lazygit).
+# with template tabs (default: a single plain shell tab).
 #
 # Open workspaces are ordered by how recently the sessionizer switched to
 # them, with the currently focused workspace last — so on open, the cursor
@@ -58,8 +58,8 @@ CONFIG_FILE="$CONFIG_DIR/config.json"
 HISTORY_FILE="$STATE_DIR/history"
 
 # Defaults, overridable per key in config.json (see README for the schema).
-TEMPLATE_TABS=("cc" "vim" "lazygit")
-TEMPLATE_CMDS=("claude" "nvim" "lazygit")
+TEMPLATE_TABS=("main")
+TEMPLATE_CMDS=("")
 GIT_ROOTS_ONLY=1
 EXTRA_DIRS=()
 
@@ -80,9 +80,7 @@ load_config() {
     cat >"$CONFIG_FILE" <<'EOF'
 {
   "template": [
-    { "tab": "cc", "command": "claude" },
-    { "tab": "vim", "command": "nvim" },
-    { "tab": "lazygit", "command": "lazygit" }
+    { "tab": "main" }
   ],
   "git_roots_only": true,
   "extra_dirs": [],

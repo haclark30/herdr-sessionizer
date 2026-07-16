@@ -3,7 +3,7 @@
 tmux-sessionizer, for [herdr](https://herdr.dev). One keybind opens an fzf
 picker over your open workspaces and your zoxide directories; selecting an
 open workspace focuses it, selecting a directory creates a workspace there
-with your template tabs already running (default: `claude`, `nvim`, `lazygit`).
+with your template tabs already running (default: a single plain shell tab).
 
 Open workspaces are ordered by how recently you switched to them, with the
 current workspace last — so `prefix+f`, `enter` toggles between your two most
@@ -74,15 +74,13 @@ First run writes `config.json` to the plugin config dir
 ```json
 {
   "template": [
-    { "tab": "cc", "command": "claude" },
-    { "tab": "vim", "command": "nvim" },
-    { "tab": "lazygit", "command": "lazygit" }
+    { "tab": "main" }
   ],
   "git_roots_only": true,
   "extra_dirs": ["~/Documents/some-project"],
   "overrides": [
     {
-      "match": "*/Tortus/*",
+      "match": "*/work/*",
       "template": [
         { "tab": "cc", "command": "claude" },
         { "tab": "dev", "command": "pnpm dev" },
