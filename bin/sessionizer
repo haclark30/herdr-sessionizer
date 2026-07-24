@@ -259,8 +259,8 @@ preview() {
         .result.agent | "\(.agent)  [\(.agent_status)]  \(.cwd)"
       '
       echo
+      # agent read emits raw scrollback text, not a JSON envelope
       $HERDR agent read "$target" --source visible --format ansi \
-        | jq -r '.result.read.text' \
         | tail -n "$((${FZF_PREVIEW_LINES:-40} - 2))"
       ;;
   esac
