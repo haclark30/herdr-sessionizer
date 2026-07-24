@@ -357,6 +357,14 @@ run_picker() {
   local mode="$1" prompt="workspace> "
   [ "$mode" = agents ] && prompt="agents> "
   command -v fzf >/dev/null || die "fzf is required for the picker (brew install fzf)"
+  # The transform: bindings below need fzf >= 0.45. Older fzf rejects them and
+  # exits before drawing anything, which the cancel handling (`|| exit 0`)
+  # would otherwise swallow silently.
+  local fzf_version major minor
+  fzf_version="$(fzf --version | cut -d' ' -f1)"
+  major="${fzf_version%%.*}" minor="${fzf_version#*.}" minor="${minor%%.*}"
+  [ "$major" -gt 0 ] 2>/dev/null || [ "$minor" -ge 45 ] 2>/dev/null \
+    || die "fzf >= 0.45 required, found $fzf_version (brew upgrade fzf)"
   selection="$(list_for_mode "$mode" | fzf \
     --delimiter '\t' --with-nth 3 --ansi \
     --no-multi --reverse --border --prompt "$prompt" \
