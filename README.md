@@ -15,7 +15,7 @@ agent needs you.
 
 ## Demo
 
-[![Demo video](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo-poster.png)](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo.mp4)
+[![Demo video](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo-poster.png)](https://github.com/salkhalil/herdr-sessionizer/blob/assets/demo.mp4)
 
 *Click to play (1 min). The video lives on the [`assets`](https://github.com/salkhalil/herdr-sessionizer/tree/assets) branch, so plugin installs never download it.*
 
