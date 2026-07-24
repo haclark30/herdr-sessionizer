@@ -13,6 +13,12 @@ Press `tab` inside the picker to flip to the **agent view**: one row per pane
 with a detected agent, most urgent first, for jumping straight to whichever
 agent needs you.
 
+## Demo
+
+[![Demo video](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo-poster.png)](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo.mp4)
+
+*Click to play (1 min). The video lives on the [`assets`](https://github.com/salkhalil/herdr-sessionizer/tree/assets) branch, so plugin installs never download it.*
+
 ## Requirements
 
 `herdr` ≥ 0.7, `fzf` ≥ 0.45, `jq`, `bash` ≥ 4. `zoxide` is recommended but
