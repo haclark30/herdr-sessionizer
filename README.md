@@ -15,9 +15,9 @@ agent needs you.
 
 ## Demo
 
-[![Demo video](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo-poster.png)](https://github.com/salkhalil/herdr-sessionizer/blob/assets/demo.mp4)
+![Demo](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo.gif)
 
-*Click to play (1 min). The video lives on the [`assets`](https://github.com/salkhalil/herdr-sessionizer/tree/assets) branch, so plugin installs never download it.*
+*1 min loop — [full-quality video here](https://github.com/salkhalil/herdr-sessionizer/blob/assets/demo.mp4). Media lives on the [`assets`](https://github.com/salkhalil/herdr-sessionizer/tree/assets) branch, so plugin installs never download it.*
 
 ## Requirements
 
