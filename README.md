@@ -17,8 +17,6 @@ agent needs you.
 
 ![Demo](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo.gif)
 
-*~50s loop at 1.25× speed — [full-quality video here](https://github.com/salkhalil/herdr-sessionizer/blob/assets/demo.mp4). Media lives on the [`assets`](https://github.com/salkhalil/herdr-sessionizer/tree/assets) branch, so plugin installs never download it.*
-
 ## Requirements
 
 `herdr` ≥ 0.7, `fzf` ≥ 0.45, `jq`, `bash` ≥ 4. `zoxide` is recommended but
