@@ -17,7 +17,7 @@ agent needs you.
 
 ![Demo](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo.gif)
 
-*1 min loop — [full-quality video here](https://github.com/salkhalil/herdr-sessionizer/blob/assets/demo.mp4). Media lives on the [`assets`](https://github.com/salkhalil/herdr-sessionizer/tree/assets) branch, so plugin installs never download it.*
+*~50s loop at 1.25× speed — [full-quality video here](https://github.com/salkhalil/herdr-sessionizer/blob/assets/demo.mp4). Media lives on the [`assets`](https://github.com/salkhalil/herdr-sessionizer/tree/assets) branch, so plugin installs never download it.*
 
 ## Requirements
 
