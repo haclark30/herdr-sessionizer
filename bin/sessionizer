@@ -32,6 +32,13 @@
 
 set -euo pipefail
 
+# Check homebrew and usr local binaries for fzf
+for dir in /opt/homebrew/bin /usr/local/bin; do
+  if [[ -d "$dir" && ":$PATH:" != *":$dir:"* ]]; then
+    export PATH="$dir:$PATH"
+  fi
+done
+
 HERDR="${HERDR_BIN_PATH:-herdr}"
 
 # In a plugin pane, stderr vanishes when the pane closes on exit — hold it
