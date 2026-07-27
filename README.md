@@ -1,5 +1,7 @@
 # herdr-sessionizer
 
+![Demo](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo.gif)
+
 tmux-sessionizer, for [herdr](https://herdr.dev). One keybind opens an fzf
 picker over your open workspaces and your zoxide directories; selecting an
 open workspace focuses it, selecting a directory creates a workspace there
@@ -13,9 +15,7 @@ Press `tab` inside the picker to flip to the **agent view**: one row per pane
 with a detected agent, most urgent first, for jumping straight to whichever
 agent needs you.
 
-## Demo
 
-![Demo](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo.gif)
 
 ## Requirements
 
