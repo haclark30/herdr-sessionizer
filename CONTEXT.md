@@ -1,14 +1,14 @@
 # herdr-sessionizer — Context
 
 The sessionizer is a herdr plugin: one keybind opens an fzf picker over open
-workspaces and zoxide directories; selecting focuses or creates a workspace
+workspaces and project directories; selecting focuses or creates a workspace
 with template tabs. See `README.md` for user-facing docs and
 `docs/herdr-cli.md` for the herdr CLI surface it builds on.
 
 ## Glossary
 
 - **Workspace picker** — the default picker view: open workspaces (recency-ordered,
-  focused workspace last) followed by zoxide/extra directories. Selecting an open
+  focused workspace last) followed by search_dirs/extra directories. Selecting an open
   workspace focuses it; selecting a directory creates a workspace from the template.
 - **Agent view** — the second picker view: one row per *agent* (a pane where herdr
   detected a running agent), ordered most-urgent first. Selecting a row jumps

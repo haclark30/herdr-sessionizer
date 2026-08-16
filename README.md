@@ -3,9 +3,10 @@
 ![Demo](https://raw.githubusercontent.com/salkhalil/herdr-sessionizer/assets/demo.gif)
 
 tmux-sessionizer, for [herdr](https://herdr.dev). One keybind opens an fzf
-picker over your open workspaces and your zoxide directories; selecting an
-open workspace focuses it, selecting a directory creates a workspace there
-with your template tabs already running (default: a single plain shell tab).
+picker over your open workspaces and configured search directories (e.g.
+`~/git`, `~/nas`, `~/dotfiles`); selecting an open workspace focuses it,
+selecting a directory creates a workspace there with your template tabs already
+running (default: a single plain shell tab).
 
 Open workspaces are ordered by how recently you switched to them, with the
 current workspace last — so `prefix+f`, `enter` toggles between your two most
@@ -19,8 +20,7 @@ agent needs you.
 
 ## Requirements
 
-`herdr` ≥ 0.7, `fzf` ≥ 0.45, `jq`, `bash` ≥ 4. `zoxide` is recommended but
-optional — without it the picker only offers open workspaces and `extra_dirs`.
+`herdr` ≥ 0.7, `fzf` ≥ 0.45, `jq`, `bash` ≥ 4.
 
 ## Install
 
@@ -80,7 +80,11 @@ First run writes `config.json` to the plugin config dir
   "template": [
     { "tab": "main" }
   ],
-  "git_roots_only": true,
+  "search_dirs": [
+    { "path": "~/git", "mindepth": 1, "maxdepth": 1 },
+    { "path": "~/nas", "mindepth": 1, "maxdepth": 1 },
+    { "path": "~/dotfiles", "mindepth": 0, "maxdepth": 0 }
+  ],
   "extra_dirs": ["~/Documents/some-project"],
   "overrides": [
     {
@@ -98,9 +102,11 @@ First run writes `config.json` to the plugin config dir
 - `template` — tabs for new workspaces. The first entry replaces the initial
   tab and gets focus; `command` is typed into the tab's shell (arguments
   work), and omitting it leaves a plain shell.
-- `git_roots_only` — set `false` to offer every zoxide directory, not just
-  git roots.
-- `extra_dirs` — directories to always offer regardless of zoxide/git
+- `search_dirs` — directories and depths to search for project directories
+  (default: `~/git` depth 1, `~/nas` depth 1, and `~/dotfiles` depth 0). Each
+  entry can be an object specifying `path`, `mindepth`, and `maxdepth` (or `depth`),
+  or a plain string path (defaulting to mindepth 1, maxdepth 1).
+- `extra_dirs` — individual directories to always offer regardless of search_dirs
   (leading `~` is expanded).
 - `overrides` — per-project templates: the first entry whose glob `match`es
   the new workspace's directory replaces `template`. Overrides live in your

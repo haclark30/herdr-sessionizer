@@ -2,7 +2,7 @@
 #
 # sessionizer — tmux-sessionizer for herdr.
 #
-# Fuzzy-pick from open herdr workspaces + zoxide directories. Selecting an
+# Fuzzy-pick from open herdr workspaces + project directories. Selecting an
 # open workspace focuses it; selecting a directory creates a workspace there
 # with template tabs (default: a single plain shell tab).
 #
@@ -50,8 +50,6 @@ die() {
 }
 
 command -v jq >/dev/null || die "jq is required (brew install jq)"
-HAVE_ZOXIDE=0
-command -v zoxide >/dev/null && HAVE_ZOXIDE=1
 
 # Standalone runs ask herdr for the plugin's config dir so CLI and plugin-pane
 # invocations share one config and switch history.
@@ -67,7 +65,7 @@ HISTORY_FILE="$STATE_DIR/history"
 # Defaults, overridable per key in config.json (see README for the schema).
 TEMPLATE_TABS=("main")
 TEMPLATE_CMDS=("")
-GIT_ROOTS_ONLY=1
+SEARCH_DIRS=()
 EXTRA_DIRS=()
 
 read_template() {
@@ -89,7 +87,11 @@ load_config() {
   "template": [
     { "tab": "main" }
   ],
-  "git_roots_only": true,
+  "search_dirs": [
+    { "path": "~/git", "mindepth": 1, "maxdepth": 1 },
+    { "path": "~/nas", "mindepth": 1, "maxdepth": 1 },
+    { "path": "~/dotfiles", "mindepth": 0, "maxdepth": 0 }
+  ],
   "extra_dirs": [],
   "overrides": []
 }
@@ -106,7 +108,25 @@ EOF
   if [ "$(jq -r 'has("template")' "$CONFIG_FILE")" = true ]; then
     read_template '.template'
   fi
-  GIT_ROOTS_ONLY="$(jq -r 'if (.git_roots_only // true) then 1 else 0 end' "$CONFIG_FILE")"
+
+  SEARCH_DIRS=()
+  local s_path s_mindepth s_maxdepth
+  while IFS=$'\t' read -r s_path s_mindepth s_maxdepth; do
+    [ -n "$s_path" ] || continue
+    s_path="${s_path/#\~/$HOME}"
+    SEARCH_DIRS+=("$s_path"$'\t'"$s_mindepth"$'\t'"$s_maxdepth")
+  done < <(jq -r '
+    (if has("search_dirs") then .search_dirs else [
+      {"path": "~/git", "mindepth": 1, "maxdepth": 1},
+      {"path": "~/nas", "mindepth": 1, "maxdepth": 1},
+      {"path": "~/dotfiles", "mindepth": 0, "maxdepth": 0}
+    ] end)
+    | .[]
+    | (if type == "string" then {path: ., mindepth: 1, maxdepth: 1} else {path: .path, mindepth: (.mindepth // .depth // 1), maxdepth: (.maxdepth // .depth // 1)} end)
+    | [.path, (.mindepth|tostring), (.maxdepth|tostring)]
+    | @tsv
+  ' "$CONFIG_FILE")
+
   EXTRA_DIRS=()
   local d
   while IFS= read -r d; do
@@ -184,16 +204,13 @@ list_candidates() {
       "$sort_class" $((999999999 - rank)) "$number" "$ws_id" "$label" "$status" "$(display_path "$cwd")"
   done | sort -t$'\t' -k1,1n -k2,2n -k3,3n | cut -f4-
 
-  # Zoxide dirs (frecency order) + EXTRA_DIRS, minus already-open ones.
-  # Without zoxide the picker still manages open workspaces and EXTRA_DIRS.
+  # Directory candidates (from SEARCH_DIRS + EXTRA_DIRS), minus already-open ones.
   {
-    if [ "$HAVE_ZOXIDE" = 1 ]; then
-      zoxide query -l | while IFS= read -r dir; do
-        [ -d "$dir" ] || continue
-        if [ "$GIT_ROOTS_ONLY" = 1 ] && [ ! -e "$dir/.git" ]; then continue; fi
-        printf '%s\n' "$dir"
-      done
-    fi
+    for entry in "${SEARCH_DIRS[@]}"; do
+      IFS=$'\t' read -r s_path s_mindepth s_maxdepth <<<"$entry"
+      [ -d "$s_path" ] || continue
+      find "$s_path" -mindepth "$s_mindepth" -maxdepth "$s_maxdepth" -type d
+    done
     for dir in ${EXTRA_DIRS[@]+"${EXTRA_DIRS[@]}"}; do
       [ -d "$dir" ] && printf '%s\n' "$dir"
     done
@@ -425,7 +442,26 @@ case "${1:-}" in
     fi
     ;;
   *)
-    [ -d "$1" ] || { echo "sessionizer: not a directory: $1" >&2; exit 1; }
-    switch_to_dir "$1"
+    target="$1"
+    if [ ! -d "$target" ]; then
+      match=""
+      for entry in "${SEARCH_DIRS[@]}"; do
+        IFS=$'\t' read -r s_path s_mindepth s_maxdepth <<<"$entry"
+        [ -d "$s_path" ] || continue
+        while IFS= read -r dir; do
+          if [ "$(basename "$dir")" = "$target" ]; then
+            match="$dir"
+            break 2
+          fi
+        done < <(find "$s_path" -mindepth "$s_mindepth" -maxdepth "$s_maxdepth" -type d)
+      done
+      if [ -n "$match" ]; then
+        target="$match"
+      else
+        echo "sessionizer: not a directory: $1" >&2
+        exit 1
+      fi
+    fi
+    switch_to_dir "$target"
     ;;
 esac
